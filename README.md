@@ -31,6 +31,23 @@ et si vous mourez, vous recommencez au début.
 - Chaque espèce a sa vitesse (100 = comme vous) : rat 150 et démon 135 (rapides),
   gobelin 120, orc 100, squelette 80 et troll 65 (lents, on peut les fuir).
 
+## Combats
+
+Toucher un monstre lance un combat au tour par tour (jusqu'à 3 ennemis).
+Si vous le touchez en premier, vous avez l'**avantage** ; s'il vous attrape, c'est une **embuscade**.
+
+- **Attaque** : coup physique. **Compétences** : sorts qui coûtent des PM.
+- **Objets** : potion de soin. **Défense** : dégâts divisés par deux. **Fuir** : 60 % de chances.
+- Chaque monstre a une **faiblesse** (et parfois une résistance). La toucher le met **à terre**
+  et vous donne **UNE DE PLUS** : vous rejouez tout de suite.
+- Quand tous les ennemis sont à terre, l'**assaut général** frappe tout le monde très fort.
+- Les faiblesses découvertes s'affichent sous les monstres.
+- Les PM reviennent en marchant, en descendant un étage et en montant de niveau.
+- Nouvelles compétences : Coup puissant (niveau 3), Tempête (niveau 5), Brasier (niveau 6).
+
+Commandes en combat : haut/bas pour choisir, gauche/droite pour la cible,
+Entrée ou Espace pour valider, Échap pour revenir.
+
 ## Graphismes
 
 Les images sont dans `assets/sprites.png` (pixel art 12×12, affiché en ×2).
@@ -46,7 +63,8 @@ un nombre dans **Graine Fixe** (0 = donjon aléatoire).
 
 ## Fichiers
 
-- `scripts/main.gd` : le jeu (tours, combats, vision, affichage).
+- `scripts/main.gd` : la carte (déplacements, monstres, vision, affichage).
+- `scripts/battle.gd` : l'écran de combat.
 - `scripts/dungeon.gd` : la génération des donjons.
 - `assets/sprites.png` et `tools/make_sprites.py` : les graphismes.
 - `.agents/skills/` et `.claude/skills/` : les skills de développement de jeux pour Claude.

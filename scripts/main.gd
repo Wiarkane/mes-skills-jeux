@@ -3,6 +3,7 @@ extends Node2D
 ## Les images viennent de assets/sprites.png (créée par tools/make_sprites.py).
 
 const Dungeon = preload("res://scripts/dungeon.gd")
+const Battle = preload("res://scripts/battle.gd")
 const SPRITES = preload("res://assets/sprites.png")
 const SPRITE_PX := 12
 const SHEET_COLUMNS := 8
@@ -59,15 +60,15 @@ const DIRS := [
 
 var COL_BG := Color("0d0d10")
 
-# nom, image, PV, attaque, défense, XP, profondeur minimale, fréquence, vitesse
+# nom, image, PV, attaque, défense, XP, profondeur minimale, fréquence, vitesse, faiblesse, résistance
 # Vitesse : 100 = comme le héros, 150 = agit 1,5 fois par tour, 50 = un tour sur deux.
 var MONSTERS := [
-	["le rat", 7, 4, 2, 0, 2, 1, 6, 150],
-	["le gobelin", 8, 7, 3, 0, 4, 1, 4, 120],
-	["le squelette", 9, 10, 4, 1, 6, 2, 3, 80],
-	["l'orc", 10, 15, 5, 2, 9, 3, 3, 100],
-	["le troll", 11, 26, 7, 3, 16, 5, 2, 65],
-	["le démon", 12, 34, 9, 4, 25, 7, 2, 135],
+	["le rat", 7, 4, 2, 0, 2, 1, 6, 150, "feu", ""],
+	["le gobelin", 8, 7, 3, 0, 4, 1, 4, 120, "glace", "foudre"],
+	["le squelette", 9, 10, 4, 1, 6, 2, 3, 80, "physique", "glace"],
+	["l'orc", 10, 15, 5, 2, 9, 3, 3, 100, "vent", "physique"],
+	["le troll", 11, 26, 7, 3, 16, 5, 2, 65, "feu", "glace"],
+	["le démon", 12, 34, 9, 4, 25, 7, 2, 135, "glace", "feu"],
 ]
 
 # type, image, fréquence
@@ -88,6 +89,10 @@ class Actor:
 	var defense: int
 	var xp: int
 	var awake := false
+	var sp := 0  # points de magie (PM)
+	var max_sp := 0
+	var weak := ""  # élément qui le met à terre
+	var resist := ""  # élément qui lui fait moitié moins de dégâts
 	var speed := 100  # énergie gagnée par tour du héros
 	var energy := 0  # un monstre agit chaque fois qu'il atteint 100
 	# Animation : position affichée (en pixels), élan d'attaque, flash quand touché.
@@ -140,6 +145,10 @@ var visible_cells := {}
 var explored := PackedByteArray()
 var messages: Array[String] = []
 var font: Font
+var battle: Battle
+var known_weak := {}  # faiblesses découvertes (par nom de monstre)
+var known_resist := {}
+var steps_for_sp := 0
 
 # Effets visuels en cours
 var anim_time := 0.0
@@ -159,6 +168,9 @@ func _ready() -> void:
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	load_profile()
 	zoom = ZOOM_LEVELS[zoom_index]
+	battle = Battle.new()
+	battle.main = self
+	add_child(battle)
 	new_run()
 
 
@@ -191,7 +203,7 @@ func _process(delta: float) -> void:
 ## Touche de direction maintenue : le héros continue d'avancer, un pas après l'autre.
 func handle_held_keys(delta: float) -> void:
 	hold_wait = maxf(0.0, hold_wait - delta)
-	if game_over or player.step_t > 0.0 or hold_wait > 0.0:
+	if game_over or battle.active or player.step_t > 0.0 or hold_wait > 0.0:
 		return
 	var dir := held_direction()
 	if dir == Vector2i.ZERO:
@@ -239,6 +251,10 @@ func new_run() -> void:
 	game_over = false
 	messages.clear()
 	player = Actor.new("vous", SPR_PLAYER, Vector2i.ZERO, 30, 5, 1, 0)
+	player.max_sp = 20
+	player.sp = 20
+	known_weak.clear()
+	known_resist.clear()
 	log_msg("Bienvenue dans le donjon. Trouvez l'escalier > pour descendre.")
 	build_level()
 
@@ -323,6 +339,8 @@ func make_monster(p: Vector2i) -> Actor:
 	var m := Actor.new(r[0], r[1], p, hp, atk, r[4], r[5])
 	m.vis = cell_px(p)
 	m.speed = r[8]
+	m.weak = r[9]
+	m.resist = r[10]
 	m.energy = rng.randi_range(0, 99)  # pour que les monstres ne bougent pas tous en même temps
 	return m
 
@@ -347,7 +365,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 
 	var key := event as InputEventKey
-	if key == null or not key.pressed:
+	if key == null or not key.pressed or battle.active:
 		return
 
 	# Zoom : touches + et - (lettre réelle de la touche, pour marcher sur tous les claviers).
@@ -414,12 +432,19 @@ func try_move(dir: Vector2i) -> bool:
 	var target := player.pos + dir
 	var m := monster_at(target)
 	if m != null:
-		attack(player, m)
-		return true
+		if dir.x != 0:
+			player.facing = signi(dir.x)
+		start_battle(m, "avantage")
+		return false
 	if not dungeon.is_walkable(target):
 		return false
 	start_step(player, dir, current_step_time())
 	player.pos = target
+	# Marcher redonne des PM petit à petit.
+	steps_for_sp += 1
+	if steps_for_sp >= 5:
+		steps_for_sp = 0
+		player.sp = mini(player.max_sp, player.sp + 1)
 	pick_up()
 	if target == stairs:
 		log_msg("Un escalier descend ici. Appuyez sur Entrée.")
@@ -450,6 +475,7 @@ func descend() -> void:
 		return
 	depth += 1
 	player.hp = mini(player.max_hp, player.hp + 5)
+	player.sp = mini(player.max_sp, player.sp + 5)
 	if depth > best_depth:
 		best_depth = depth
 		save_profile()
@@ -479,51 +505,76 @@ func pick_up() -> void:
 
 # ---------------------------------------------------------------- Combat
 
-func attack(attacker: Actor, target: Actor) -> void:
-	var dmg := maxi(1, attacker.atk - target.defense + rng.randi_range(-1, 1))
-	target.hp -= dmg
-	attacker.bump_dir = Vector2(target.pos - attacker.pos).normalized()
-	if target.pos.x != attacker.pos.x:
-		attacker.facing = signi(target.pos.x - attacker.pos.x)
-	attacker.bump_t = 1.0
-	target.flash_t = 1.0
-	if target == player:
-		pop_text(target.pos, "-%d" % dmg, Color("ff5a4a"))
-		trauma = minf(1.0, trauma + 0.45)
+## Lance un combat contre ce monstre et les monstres réveillés tout proches (3 au plus).
+func start_battle(first: Actor, mode: String) -> void:
+	var group: Array = [first]
+	for m in monsters:
+		if group.size() >= 3:
+			break
+		if m == first or not m.awake or not visible_cells.has(m.pos):
+			continue
+		var d := m.pos - player.pos
+		if maxi(absi(d.x), absi(d.y)) <= 3:
+			group.append(m)
+	first.awake = true
+	if group.size() == 1:
+		log_msg("Combat contre %s !" % first.name)
 	else:
-		pop_text(target.pos, "-%d" % dmg, Color("fff2c0"))
-	if attacker == player:
-		log_msg("Vous frappez %s : %d dégâts." % [target.name, dmg])
-	else:
-		log_msg("%s vous frappe : %d dégâts." % [capitalize_first(attacker.name), dmg])
-	if target.hp <= 0:
-		kill(target)
+		log_msg("Combat contre %d ennemis !" % group.size())
+	battle.start(group, mode)
 
 
-func kill(target: Actor) -> void:
-	if target == player:
-		game_over = true
-		if depth > best_depth:
-			best_depth = depth
-		save_profile()
-		log_msg("Vous êtes mort à la profondeur %d." % depth)
-		trauma = 1.0
-		return
-	monsters.erase(target)
-	ghosts.append({"sprite": target.sprite, "pos": target.vis, "t": 0.0})
+## Appelé par l'écran de combat quand il se termine.
+func on_battle_end(result: String, xp: int, survivors: Array) -> void:
+	match result:
+		"victoire":
+			log_msg("Victoire ! +%d XP." % xp)
+			gain_xp(xp)
+		"fuite":
+			log_msg("Vous avez pris la fuite.")
+			# Les monstres restent étourdis un moment pour vous laisser partir.
+			for m: Actor in survivors:
+				m.energy = -200
+		"defaite":
+			player_died()
+	fade = 1.0
+	hold_wait = 0.4
+	update_fov()
+	queue_redraw()
+
+
+## Retire de la carte un monstre vaincu en combat.
+func remove_monster(m: Actor) -> void:
+	monsters.erase(m)
 	kills += 1
-	player.xp += target.xp
-	log_msg("Vous avez vaincu %s ! (+%d XP)" % [target.name, target.xp])
-	if rng.randf() < 0.15 and item_at(target.pos) == null:
-		items.append(Item.new("potion", SPR_POTION, target.pos))
+	if rng.randf() < 0.2 and item_at(m.pos) == null:
+		items.append(Item.new("potion", SPR_POTION, m.pos))
+
+
+func gain_xp(amount: int) -> void:
+	player.xp += amount
 	while player.xp >= level * 10:
 		player.xp -= level * 10
 		level += 1
 		player.max_hp += 6
 		player.hp = mini(player.max_hp, player.hp + 10)
 		player.atk += 1
-		log_msg("Niveau %d ! PV max +6, attaque +1." % level)
+		player.max_sp += 3
+		player.sp = player.max_sp
+		log_msg("Niveau %d ! PV max +6, PM max +3, attaque +1." % level)
 		pop_text(player.pos + Vector2i.UP, "NIVEAU %d !" % level, Color("e8c547"))
+		for row: Array in battle.SKILLS:
+			if int(row[5]) == level:
+				log_msg("Nouvelle compétence : %s !" % row[0])
+
+
+func player_died() -> void:
+	game_over = true
+	if depth > best_depth:
+		best_depth = depth
+	save_profile()
+	log_msg("Vous êtes mort à la profondeur %d." % depth)
+	trauma = 1.0
 
 
 ## Tour des monstres. Chaque action du héros vaut 100 d'énergie : chaque monstre gagne
@@ -539,7 +590,7 @@ func monsters_act() -> void:
 			continue
 		m.energy += m.speed
 		while m.energy >= TURN_COST:
-			if game_over:
+			if game_over or battle.active:
 				return
 			m.energy -= TURN_COST
 			monster_take_action(m, dist)
@@ -548,7 +599,7 @@ func monsters_act() -> void:
 func monster_take_action(m: Actor, dist: Dictionary) -> void:
 	var d := m.pos - player.pos
 	if absi(d.x) <= 1 and absi(d.y) <= 1:
-		attack(m, player)
+		start_battle(m, "embuscade")
 		return
 	var best := m.pos
 	var best_d: int = dist.get(m.pos, 9999)
@@ -854,6 +905,10 @@ func draw_ui() -> void:
 	draw_rect(Rect2(12, y0, bar_w * hp / player.max_hp, 20), Color("c0392b"))
 	draw_string(font, Vector2(20, y0 + 15), "PV %d / %d" % [hp, player.max_hp],
 		HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color.WHITE)
+	draw_rect(Rect2(12, y0 + 23, bar_w, 16), Color("1c2440"))
+	draw_rect(Rect2(12, y0 + 23, bar_w * player.sp / maxi(player.max_sp, 1), 16), Color("4a8cff"))
+	draw_string(font, Vector2(20, y0 + 36), "PM %d / %d" % [player.sp, player.max_sp],
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color.WHITE)
 
 	var stats := "Profondeur %d    Niveau %d (XP %d/%d)    Attaque %d    Défense %d    Potions %d    Record %d" % [
 		depth, level, player.xp, level * 10, player.atk, player.defense, potions, best_depth]
@@ -863,7 +918,7 @@ func draw_ui() -> void:
 	for i in range(start, messages.size()):
 		var age := messages.size() - 1 - i
 		var shade := Color(0.95, 0.95, 0.95, 1.0 - age * 0.15)
-		draw_string(font, Vector2(12, y0 + 48 + (i - start) * 20), messages[i],
+		draw_string(font, Vector2(12, y0 + 60 + (i - start) * 19), messages[i],
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 16, shade)
 
 	draw_string(font, Vector2(12, y0 + 156),
