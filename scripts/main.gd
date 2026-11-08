@@ -46,6 +46,8 @@ const UI_H := 176
 const FOV_RADIUS := 8
 const PROFILE_PATH := "user://profil.cfg"
 
+const TURN_COST := 100  # énergie nécessaire pour agir
+
 const DIRS := [
 	Vector2i(-1, -1), Vector2i(0, -1), Vector2i(1, -1),
 	Vector2i(-1, 0), Vector2i(1, 0),
@@ -57,14 +59,15 @@ const DIRS := [
 
 var COL_BG := Color("0d0d10")
 
-# nom, image, PV, attaque, défense, XP, profondeur minimale, fréquence
+# nom, image, PV, attaque, défense, XP, profondeur minimale, fréquence, vitesse
+# Vitesse : 100 = comme le héros, 150 = agit 1,5 fois par tour, 50 = un tour sur deux.
 var MONSTERS := [
-	["le rat", 7, 4, 2, 0, 2, 1, 6],
-	["le gobelin", 8, 7, 3, 0, 4, 1, 4],
-	["le squelette", 9, 10, 4, 1, 6, 2, 3],
-	["l'orc", 10, 15, 5, 2, 9, 3, 3],
-	["le troll", 11, 26, 7, 3, 16, 5, 2],
-	["le démon", 12, 34, 9, 4, 25, 7, 2],
+	["le rat", 7, 4, 2, 0, 2, 1, 6, 150],
+	["le gobelin", 8, 7, 3, 0, 4, 1, 4, 120],
+	["le squelette", 9, 10, 4, 1, 6, 2, 3, 80],
+	["l'orc", 10, 15, 5, 2, 9, 3, 3, 100],
+	["le troll", 11, 26, 7, 3, 16, 5, 2, 65],
+	["le démon", 12, 34, 9, 4, 25, 7, 2, 135],
 ]
 
 # type, image, fréquence
@@ -85,6 +88,8 @@ class Actor:
 	var defense: int
 	var xp: int
 	var awake := false
+	var speed := 100  # énergie gagnée par tour du héros
+	var energy := 0  # un monstre agit chaque fois qu'il atteint 100
 	# Animation : position affichée (en pixels), élan d'attaque, flash quand touché.
 	var vis := Vector2.ZERO
 	var bump_dir := Vector2.ZERO
@@ -317,6 +322,8 @@ func make_monster(p: Vector2i) -> Actor:
 	var atk: int = r[3] + bonus
 	var m := Actor.new(r[0], r[1], p, hp, atk, r[4], r[5])
 	m.vis = cell_px(p)
+	m.speed = r[8]
+	m.energy = rng.randi_range(0, 99)  # pour que les monstres ne bougent pas tous en même temps
 	return m
 
 
@@ -519,33 +526,44 @@ func kill(target: Actor) -> void:
 		pop_text(player.pos + Vector2i.UP, "NIVEAU %d !" % level, Color("e8c547"))
 
 
+## Tour des monstres. Chaque action du héros vaut 100 d'énergie : chaque monstre gagne
+## son énergie de vitesse et agit une fois par tranche de 100. Un monstre rapide peut donc
+## agir deux fois dans un tour, un monstre lent passe parfois son tour.
 func monsters_act() -> void:
 	var dist := distance_map(player.pos)
 	for m in monsters:
-		if game_over:
-			return
 		# Vision symétrique : si vous voyez le monstre, il vous voit aussi.
 		if visible_cells.has(m.pos):
 			m.awake = true
 		if not m.awake:
 			continue
-		var d := m.pos - player.pos
-		if absi(d.x) <= 1 and absi(d.y) <= 1:
-			attack(m, player)
+		m.energy += m.speed
+		while m.energy >= TURN_COST:
+			if game_over:
+				return
+			m.energy -= TURN_COST
+			monster_take_action(m, dist)
+
+
+func monster_take_action(m: Actor, dist: Dictionary) -> void:
+	var d := m.pos - player.pos
+	if absi(d.x) <= 1 and absi(d.y) <= 1:
+		attack(m, player)
+		return
+	var best := m.pos
+	var best_d: int = dist.get(m.pos, 9999)
+	for dir: Vector2i in DIRS:
+		var p := m.pos + dir
+		if not dist.has(p) or monster_at(p) != null:
 			continue
-		var best := m.pos
-		var best_d: int = dist.get(m.pos, 9999)
-		for dir: Vector2i in DIRS:
-			var p := m.pos + dir
-			if not dist.has(p) or monster_at(p) != null:
-				continue
-			var dp: int = dist[p]
-			if dp < best_d:
-				best_d = dp
-				best = p
-		if best != m.pos:
-			start_step(m, best - m.pos, player.step_time)
-			m.pos = best
+		var dp: int = dist[p]
+		if dp < best_d:
+			best_d = dp
+			best = p
+	if best != m.pos:
+		# L'animation suit la vitesse : un monstre lent marche plus lentement.
+		start_step(m, best - m.pos, player.step_time * TURN_COST / m.speed)
+		m.pos = best
 
 
 func distance_map(from: Vector2i) -> Dictionary:

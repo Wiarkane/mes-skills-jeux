@@ -28,6 +28,8 @@ et si vous mourez, vous recommencez au début.
 - Objets : potion de soin (rose), épée (attaque +1), bouclier (défense +1).
 - Monstres : rat, gobelin, squelette, orc, troll, démon.
   Plus vous descendez, plus ils sont nombreux et forts.
+- Chaque espèce a sa vitesse (100 = comme vous) : rat 150 et démon 135 (rapides),
+  gobelin 120, orc 100, squelette 80 et troll 65 (lents, on peut les fuir).
 
 ## Graphismes
 
