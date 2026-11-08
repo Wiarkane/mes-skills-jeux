@@ -17,6 +17,7 @@ et si vous mourez, vous recommencez au début.
 | Pavé numérique (1-9) | Se déplacer, y compris en diagonale |
 | Espace ou 5 | Attendre un tour |
 | E | Boire une potion de soin |
+| Molette, + ou - | Zoomer ou dézoomer |
 | Entrée | Descendre l'escalier `>` |
 | R | Nouvelle partie (après la mort) |
 

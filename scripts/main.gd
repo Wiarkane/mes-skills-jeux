@@ -26,6 +26,11 @@ const FLOAT_TIME := 0.8
 const DEATH_TIME := 0.35
 const FADE_TIME := 0.35
 
+# Zoom de la caméra : 1 = toute la carte, 2 = deux fois plus près, etc.
+const ZOOM_LEVELS := [1.0, 1.5, 2.0, 2.5, 3.0]
+const DEFAULT_ZOOM_INDEX := 2
+const VIEW_SIZE := Vector2(MAP_W * TILE, UI_TOP)
+
 const TILE := 24
 const MAP_W := 60
 const MAP_H := 32
@@ -123,6 +128,9 @@ var font: Font
 
 # Effets visuels en cours
 var anim_time := 0.0
+var zoom_index := DEFAULT_ZOOM_INDEX
+var zoom := 2.0
+var cam := Vector2.ZERO  # point de la carte (en pixels) au centre de l'écran
 var trauma := 0.0  # secousse de l'écran, de 0 à 1
 var fade := 0.0  # fondu au noir quand on change d'étage
 var floaters := []  # nombres qui s'envolent : {text, pos, color, t}
@@ -134,6 +142,7 @@ func _ready() -> void:
 	# Pixels nets quand les images sont agrandies (pas de flou).
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	load_profile()
+	zoom = ZOOM_LEVELS[zoom_index]
 	new_run()
 
 
@@ -153,6 +162,7 @@ func _process(delta: float) -> void:
 	for g: Dictionary in ghosts:
 		g["t"] += delta
 	ghosts = ghosts.filter(func(g: Dictionary) -> bool: return g["t"] < DEATH_TIME)
+	cam = cam.lerp(camera_target(), 1.0 - exp(-delta * 10.0))
 	trauma = maxf(0.0, trauma - delta * 2.0)
 	fade = maxf(0.0, fade - delta / FADE_TIME)
 	queue_redraw()
@@ -192,6 +202,7 @@ func build_level() -> void:
 	floaters.clear()
 	ghosts.clear()
 	fade = 1.0
+	cam = camera_target()
 
 	var n_monsters := mini(3 + depth * 2, 20)
 	for i in n_monsters:
@@ -266,8 +277,24 @@ func make_item(p: Vector2i) -> Item:
 # ---------------------------------------------------------------- Commandes
 
 func _unhandled_input(event: InputEvent) -> void:
+	var mouse := event as InputEventMouseButton
+	if mouse != null and mouse.pressed:
+		if mouse.button_index == MOUSE_BUTTON_WHEEL_UP:
+			change_zoom(1)
+		elif mouse.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			change_zoom(-1)
+		return
+
 	var key := event as InputEventKey
 	if key == null or not key.pressed:
+		return
+
+	# Zoom : touches + et - (lettre réelle de la touche, pour marcher sur tous les claviers).
+	if key.keycode in [KEY_PLUS, KEY_EQUAL, KEY_KP_ADD]:
+		change_zoom(1)
+		return
+	if key.keycode in [KEY_MINUS, KEY_KP_SUBTRACT]:
+		change_zoom(-1)
 		return
 
 	if game_over:
@@ -555,12 +582,19 @@ func save_profile() -> void:
 func _draw() -> void:
 	draw_rect(Rect2(0, 0, MAP_W * TILE, UI_TOP + UI_H), COL_BG)
 
-	# La secousse déplace seulement l'affichage de la carte, pas le jeu.
+	# La caméra (zoom + suivi du héros) et la secousse changent seulement l'affichage.
 	var shake := trauma * trauma * 8.0
-	draw_set_transform(Vector2(randf_range(-shake, shake), randf_range(-shake, shake)).round())
+	var shake_offset := Vector2(randf_range(-shake, shake), randf_range(-shake, shake))
+	draw_set_transform((map_offset() + shake_offset).round(), 0.0, Vector2(zoom, zoom))
 
-	for y in MAP_H:
-		for x in MAP_W:
+	# On ne dessine que les cases visibles à l'écran.
+	var half := VIEW_SIZE / (2.0 * zoom)
+	var x0 := maxi(0, floori((cam.x - half.x) / TILE) - 1)
+	var x1 := mini(MAP_W, ceili((cam.x + half.x) / TILE) + 1)
+	var y0 := maxi(0, floori((cam.y - half.y) / TILE) - 1)
+	var y1 := mini(MAP_H, ceili((cam.y + half.y) / TILE) + 1)
+	for y in range(y0, y1):
+		for x in range(x0, x1):
 			var c := Vector2i(x, y)
 			var lit := visible_cells.has(c)
 			if not lit and explored[y * MAP_W + x] == 0:
@@ -588,17 +622,20 @@ func _draw() -> void:
 			draw_actor(m)
 	draw_actor(player)
 
+	draw_set_transform(Vector2.ZERO)
+
+	# Les textes sont dessinés sans zoom pour rester nets.
 	for fx: Dictionary in floaters:
 		var t: float = fx["t"]
 		var alpha := clampf((FLOAT_TIME - t) / (FLOAT_TIME * 0.5), 0.0, 1.0)
 		var col: Color = fx["color"]
 		col.a = alpha
-		var pos: Vector2 = fx["pos"] + Vector2(-TILE, -4.0 - t * 30.0)
-		draw_string_outline(font, pos, fx["text"], HORIZONTAL_ALIGNMENT_CENTER, TILE * 3, 16, 5,
+		var head: Vector2 = fx["pos"] + Vector2(TILE * 0.5, 0.0)
+		var pos := world_to_screen(head) + shake_offset + Vector2(-60.0, -6.0 - t * 40.0)
+		draw_string_outline(font, pos, fx["text"], HORIZONTAL_ALIGNMENT_CENTER, 120, 20, 6,
 			Color(0, 0, 0, alpha))
-		draw_string(font, pos, fx["text"], HORIZONTAL_ALIGNMENT_CENTER, TILE * 3, 16, col)
+		draw_string(font, pos, fx["text"], HORIZONTAL_ALIGNMENT_CENTER, 120, 20, col)
 
-	draw_set_transform(Vector2.ZERO)
 	draw_ui()
 
 	if fade > 0.0:
@@ -652,6 +689,31 @@ func bob(phase: float) -> float:
 	return -2.0 if int(anim_time * 2.0 + phase * 2.0) % 2 == 0 else 0.0
 
 
+func change_zoom(step: int) -> void:
+	zoom_index = clampi(zoom_index + step, 0, ZOOM_LEVELS.size() - 1)
+	zoom = ZOOM_LEVELS[zoom_index]
+	cam = camera_target()
+	queue_redraw()
+
+
+## Point que la caméra vise : le héros, sans montrer le vide au-delà des bords de la carte.
+func camera_target() -> Vector2:
+	var target := player.vis + Vector2(TILE, TILE) * 0.5
+	var half := VIEW_SIZE / (2.0 * zoom)
+	var world := Vector2(MAP_W * TILE, MAP_H * TILE)
+	target.x = clampf(target.x, half.x, world.x - half.x) if world.x > half.x * 2.0 else world.x * 0.5
+	target.y = clampf(target.y, half.y, world.y - half.y) if world.y > half.y * 2.0 else world.y * 0.5
+	return target
+
+
+func map_offset() -> Vector2:
+	return VIEW_SIZE * 0.5 - cam * zoom
+
+
+func world_to_screen(p: Vector2) -> Vector2:
+	return map_offset() + p * zoom
+
+
 func cell_px(c: Vector2i) -> Vector2:
 	return Vector2(c * TILE)
 
@@ -672,6 +734,9 @@ func tile_sprite(c: Vector2i) -> int:
 
 
 func draw_ui() -> void:
+	# Fond du panneau du bas (cache la carte qui dépasse quand on zoome).
+	draw_rect(Rect2(0, UI_TOP, MAP_W * TILE, UI_H), COL_BG)
+	draw_rect(Rect2(0, UI_TOP, MAP_W * TILE, 2), Color("2a2533"))
 	var y0 := float(UI_TOP) + 10.0
 	var bar_w := 240.0
 	var hp := maxi(player.hp, 0)
@@ -692,5 +757,5 @@ func draw_ui() -> void:
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 16, shade)
 
 	draw_string(font, Vector2(12, y0 + 156),
-		"Flèches / ZQSD / pavé numérique : bouger et attaquer   ·   Espace : attendre   ·   E : boire une potion   ·   Entrée : descendre   ·   Graine %d" % run_seed,
+		"Flèches / ZQSD / pavé numérique : bouger et attaquer   ·   Espace : attendre   ·   E : boire une potion   ·   Entrée : descendre   ·   Molette ou +/- : zoom   ·   Graine %d" % run_seed,
 		HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("8a8a96"))
