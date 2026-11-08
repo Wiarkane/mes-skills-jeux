@@ -256,6 +256,46 @@ SPRITES = [
 ]
 
 
+# Images de marche : on part de l'image du personnage et on remplace quelques lignes
+# (les jambes). A = jambes écartées, B = jambes qui se croisent.
+WALK = [
+    ("héros", PLAYER, {10: "..kTk..kTk..", 11: "..kk...kk..."},
+                      {10: "...kTkkTk...", 11: "....kkkk...."}),
+    ("rat", RAT, {10: "..knk...knk."},
+                 {8: ".k.kNNNNNNNk", 9: "k.kknNNNNnk.", 10: "....knkknk.."}),
+    ("gobelin", GOBLIN, {10: "..kVk...kVk.", 11: "..kk....kk.."},
+                        {10: "...kVkkVk...", 11: "...kk..kk..."}),
+    ("squelette", SKELETON, {10: "..kWk...kWk.", 11: "..kk....kk.."},
+                            {10: "...kWkkWk...", 11: "...kk..kk..."}),
+    ("orc", ORC, {10: ".kOOk...kOOk", 11: ".kkk.....kkk"},
+                 {10: "...kOOkOOk..", 11: "...kkk.kkk.."}),
+    ("troll", TROLL, {10: "kPPk...kPPk.", 11: "kkkk...kkkk."},
+                     {10: "..kPPkPPk...", 11: "..kkkkkkk..."}),
+    ("démon", DEMON, {10: "..kXk...kXk.", 11: "..kk....kk.."},
+                     {10: "...kXkkXk...", 11: "....kkkk...."}),
+]
+
+
+def with_rows(art, changes):
+    return [changes.get(i, line) for i, line in enumerate(art)]
+
+
+def mirror(art):
+    return [line[::-1] for line in art]
+
+
+# À partir du numéro 16 : pour chaque personnage, 5 images
+# (marche A, marche B, puis tourné vers la gauche : immobile, marche A, marche B).
+for name, art, walk_a, walk_b in WALK:
+    frame_a = with_rows(art, walk_a)
+    frame_b = with_rows(art, walk_b)
+    SPRITES.append((f"{name} marche A", frame_a))
+    SPRITES.append((f"{name} marche B", frame_b))
+    SPRITES.append((f"{name} gauche", mirror(art)))
+    SPRITES.append((f"{name} gauche marche A", mirror(frame_a)))
+    SPRITES.append((f"{name} gauche marche B", mirror(frame_b)))
+
+
 def to_rgba(hex_color):
     h = hex_color.lstrip("#")
     return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), 255)

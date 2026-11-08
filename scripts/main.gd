@@ -16,6 +16,10 @@ const SPR_FLOOR_PEBBLES := 4
 const SPR_STAIRS := 5
 const SPR_PLAYER := 6
 const SPR_POTION := 13
+# Images de marche : 5 par personnage à partir du numéro 16, dans l'ordre
+# héros, rat, gobelin, squelette, orc, troll, démon (voir tools/make_sprites.py).
+const SPR_WALK_BASE := 16
+const WALK_FRAMES := 5
 
 const DIM := Color(0.38, 0.38, 0.52)
 
@@ -25,6 +29,7 @@ const FLASH_TIME := 0.22
 const FLOAT_TIME := 0.8
 const DEATH_TIME := 0.35
 const FADE_TIME := 0.35
+const STEP_TIME := 0.2
 
 # Zoom de la caméra : 1 = toute la carte, 2 = deux fois plus près, etc.
 const ZOOM_LEVELS := [1.0, 1.5, 2.0, 2.5, 3.0]
@@ -84,6 +89,9 @@ class Actor:
 	var bump_t := 0.0
 	var flash_t := 0.0
 	var phase := randf()
+	var facing := 1  # 1 = regarde à droite, -1 = à gauche
+	var step_t := 0.0  # > 0 pendant un pas
+	var foot := 0  # alterne entre les deux images de marche
 
 	func _init(n: String, spr: int, p: Vector2i, h: int, a: int, d: int, x: int) -> void:
 		name = n
@@ -156,6 +164,7 @@ func _process(delta: float) -> void:
 		a.vis = a.vis.lerp(cell_px(a.pos), k)
 		a.bump_t = maxf(0.0, a.bump_t - delta / BUMP_TIME)
 		a.flash_t = maxf(0.0, a.flash_t - delta / FLASH_TIME)
+		a.step_t = maxf(0.0, a.step_t - delta / STEP_TIME)
 	for fx: Dictionary in floaters:
 		fx["t"] += delta
 	floaters = floaters.filter(func(f: Dictionary) -> bool: return f["t"] < FLOAT_TIME)
@@ -350,6 +359,7 @@ func try_move(dir: Vector2i) -> bool:
 		return true
 	if not dungeon.is_walkable(target):
 		return false
+	start_step(player, dir)
 	player.pos = target
 	pick_up()
 	if target == stairs:
@@ -414,6 +424,8 @@ func attack(attacker: Actor, target: Actor) -> void:
 	var dmg := maxi(1, attacker.atk - target.defense + rng.randi_range(-1, 1))
 	target.hp -= dmg
 	attacker.bump_dir = Vector2(target.pos - attacker.pos).normalized()
+	if target.pos.x != attacker.pos.x:
+		attacker.facing = signi(target.pos.x - attacker.pos.x)
 	attacker.bump_t = 1.0
 	target.flash_t = 1.0
 	if target == player:
@@ -479,7 +491,9 @@ func monsters_act() -> void:
 			if dp < best_d:
 				best_d = dp
 				best = p
-		m.pos = best
+		if best != m.pos:
+			start_step(m, best - m.pos)
+			m.pos = best
 
 
 func distance_map(from: Vector2i) -> Dictionary:
@@ -670,18 +684,39 @@ func draw_sprite_rect(rect: Rect2, index: int, tint := Color.WHITE) -> void:
 
 ## Dessine un personnage avec ses animations : respiration, élan d'attaque, flash.
 func draw_actor(a: Actor) -> void:
-	var offset := Vector2(0, bob(a.phase))
+	var offset := Vector2.ZERO
+	if a.step_t > 0.0:
+		# Petit saut à chaque pas.
+		offset.y = -2.0 * roundf(sin(PI * (1.0 - a.step_t)) * 1.5)
+	else:
+		offset.y = bob(a.phase)
 	if a.bump_t > 0.0:
 		offset += a.bump_dir * TILE * 0.4 * sin(PI * (1.0 - a.bump_t))
 	var tint := Color.WHITE
 	if a.flash_t > 0.0:
 		tint = Color(1.0 + 2.5 * a.flash_t, 1.0 + 0.8 * a.flash_t, 1.0 + 0.8 * a.flash_t)
 	var px := a.vis + offset
-	draw_sprite_px(px, a.sprite, tint)
+	draw_sprite_px(px, actor_frame(a), tint)
 	if a != player and a.hp < a.max_hp:
 		var w := float(TILE - 4) * a.hp / a.max_hp
 		draw_rect(Rect2(px.x + 2, px.y - 2, TILE - 4, 3), Color("1b1424"))
 		draw_rect(Rect2(px.x + 2, px.y - 2, w, 3), Color("e04030"))
+
+
+## Choisit l'image du personnage selon sa direction et s'il est en train de marcher.
+func actor_frame(a: Actor) -> int:
+	var base := SPR_WALK_BASE + (a.sprite - SPR_PLAYER) * WALK_FRAMES
+	var walking := a.step_t > 0.0
+	if a.facing > 0:
+		return base + a.foot if walking else a.sprite
+	return base + 3 + a.foot if walking else base + 2
+
+
+func start_step(a: Actor, dir: Vector2i) -> void:
+	if dir.x != 0:
+		a.facing = signi(dir.x)
+	a.foot = 1 - a.foot
+	a.step_t = 1.0
 
 
 ## Petit mouvement de haut en bas (1 pixel du dessin), chacun à son rythme.
