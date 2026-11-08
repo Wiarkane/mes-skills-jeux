@@ -19,6 +19,13 @@ const SPR_POTION := 13
 
 const DIM := Color(0.38, 0.38, 0.52)
 
+# Durées des animations (en secondes).
+const BUMP_TIME := 0.16
+const FLASH_TIME := 0.22
+const FLOAT_TIME := 0.8
+const DEATH_TIME := 0.35
+const FADE_TIME := 0.35
+
 const TILE := 24
 const MAP_W := 60
 const MAP_H := 32
@@ -66,6 +73,12 @@ class Actor:
 	var defense: int
 	var xp: int
 	var awake := false
+	# Animation : position affichée (en pixels), élan d'attaque, flash quand touché.
+	var vis := Vector2.ZERO
+	var bump_dir := Vector2.ZERO
+	var bump_t := 0.0
+	var flash_t := 0.0
+	var phase := randf()
 
 	func _init(n: String, spr: int, p: Vector2i, h: int, a: int, d: int, x: int) -> void:
 		name = n
@@ -108,6 +121,13 @@ var explored := PackedByteArray()
 var messages: Array[String] = []
 var font: Font
 
+# Effets visuels en cours
+var anim_time := 0.0
+var trauma := 0.0  # secousse de l'écran, de 0 à 1
+var fade := 0.0  # fondu au noir quand on change d'étage
+var floaters := []  # nombres qui s'envolent : {text, pos, color, t}
+var ghosts := []  # monstres qui disparaissent : {sprite, pos, t}
+
 
 func _ready() -> void:
 	font = ThemeDB.fallback_font
@@ -115,6 +135,27 @@ func _ready() -> void:
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	load_profile()
 	new_run()
+
+
+func _process(delta: float) -> void:
+	anim_time += delta
+	# Les personnages glissent vers leur case au lieu de s'y téléporter.
+	var k := 1.0 - exp(-delta * 22.0)
+	var actors: Array[Actor] = [player]
+	actors.append_array(monsters)
+	for a in actors:
+		a.vis = a.vis.lerp(cell_px(a.pos), k)
+		a.bump_t = maxf(0.0, a.bump_t - delta / BUMP_TIME)
+		a.flash_t = maxf(0.0, a.flash_t - delta / FLASH_TIME)
+	for fx: Dictionary in floaters:
+		fx["t"] += delta
+	floaters = floaters.filter(func(f: Dictionary) -> bool: return f["t"] < FLOAT_TIME)
+	for g: Dictionary in ghosts:
+		g["t"] += delta
+	ghosts = ghosts.filter(func(g: Dictionary) -> bool: return g["t"] < DEATH_TIME)
+	trauma = maxf(0.0, trauma - delta * 2.0)
+	fade = maxf(0.0, fade - delta / FADE_TIME)
+	queue_redraw()
 
 
 # ---------------------------------------------------------------- Partie
@@ -146,7 +187,11 @@ func build_level() -> void:
 	items.clear()
 
 	player.pos = dungeon.room_center(dungeon.rooms[0])
+	player.vis = cell_px(player.pos)
 	stairs = dungeon.room_center(dungeon.rooms[-1])
+	floaters.clear()
+	ghosts.clear()
+	fade = 1.0
 
 	var n_monsters := mini(3 + depth * 2, 20)
 	for i in n_monsters:
@@ -205,7 +250,9 @@ func make_monster(p: Vector2i) -> Actor:
 	var bonus := int((depth - 1) / 3.0)
 	var hp: int = r[2] + depth - 1
 	var atk: int = r[3] + bonus
-	return Actor.new(r[0], r[1], p, hp, atk, r[4], r[5])
+	var m := Actor.new(r[0], r[1], p, hp, atk, r[4], r[5])
+	m.vis = cell_px(p)
+	return m
 
 
 func make_item(p: Vector2i) -> Item:
@@ -296,6 +343,7 @@ func drink_potion() -> bool:
 	var healed := mini(12, player.max_hp - player.hp)
 	player.hp += healed
 	log_msg("Vous buvez une potion : +%d PV." % healed)
+	pop_text(player.pos, "+%d" % healed, Color("6fe06f"))
 	return true
 
 
@@ -322,12 +370,15 @@ func pick_up() -> void:
 		"potion":
 			potions += 1
 			log_msg("Vous ramassez une potion de soin.")
+			pop_text(player.pos, "+1 potion", Color("e05a8a"))
 		"epee":
 			player.atk += 1
 			log_msg("Vous trouvez une meilleure épée : attaque +1.")
+			pop_text(player.pos, "+1 ATQ", Color("7fd0e0"))
 		"bouclier":
 			player.defense += 1
 			log_msg("Vous trouvez un meilleur bouclier : défense +1.")
+			pop_text(player.pos, "+1 DÉF", Color("6f8fe0"))
 
 
 # ---------------------------------------------------------------- Combat
@@ -335,6 +386,14 @@ func pick_up() -> void:
 func attack(attacker: Actor, target: Actor) -> void:
 	var dmg := maxi(1, attacker.atk - target.defense + rng.randi_range(-1, 1))
 	target.hp -= dmg
+	attacker.bump_dir = Vector2(target.pos - attacker.pos).normalized()
+	attacker.bump_t = 1.0
+	target.flash_t = 1.0
+	if target == player:
+		pop_text(target.pos, "-%d" % dmg, Color("ff5a4a"))
+		trauma = minf(1.0, trauma + 0.45)
+	else:
+		pop_text(target.pos, "-%d" % dmg, Color("fff2c0"))
 	if attacker == player:
 		log_msg("Vous frappez %s : %d dégâts." % [target.name, dmg])
 	else:
@@ -350,8 +409,10 @@ func kill(target: Actor) -> void:
 			best_depth = depth
 		save_profile()
 		log_msg("Vous êtes mort à la profondeur %d." % depth)
+		trauma = 1.0
 		return
 	monsters.erase(target)
+	ghosts.append({"sprite": target.sprite, "pos": target.vis, "t": 0.0})
 	kills += 1
 	player.xp += target.xp
 	log_msg("Vous avez vaincu %s ! (+%d XP)" % [target.name, target.xp])
@@ -364,6 +425,7 @@ func kill(target: Actor) -> void:
 		player.hp = mini(player.max_hp, player.hp + 10)
 		player.atk += 1
 		log_msg("Niveau %d ! PV max +6, attaque +1." % level)
+		pop_text(player.pos + Vector2i.UP, "NIVEAU %d !" % level, Color("e8c547"))
 
 
 func monsters_act() -> void:
@@ -493,6 +555,10 @@ func save_profile() -> void:
 func _draw() -> void:
 	draw_rect(Rect2(0, 0, MAP_W * TILE, UI_TOP + UI_H), COL_BG)
 
+	# La secousse déplace seulement l'affichage de la carte, pas le jeu.
+	var shake := trauma * trauma * 8.0
+	draw_set_transform(Vector2(randf_range(-shake, shake), randf_range(-shake, shake)).round())
+
 	for y in MAP_H:
 		for x in MAP_W:
 			var c := Vector2i(x, y)
@@ -507,18 +573,36 @@ func _draw() -> void:
 
 	for it in items:
 		if visible_cells.has(it.pos):
-			draw_sprite(it.pos, it.sprite)
+			var item_phase := float((it.pos.x * 7 + it.pos.y * 3) % 10) / 10.0
+			draw_sprite_px(cell_px(it.pos) + Vector2(0, bob(item_phase)), it.sprite)
+
+	for g: Dictionary in ghosts:
+		var p: float = g["t"] / DEATH_TIME
+		var size := TILE * (1.0 - 0.5 * p)
+		var center: Vector2 = g["pos"] + Vector2(TILE, TILE) * 0.5
+		draw_sprite_rect(Rect2(center - Vector2(size, size) * 0.5, Vector2(size, size)),
+			g["sprite"], Color(3, 3, 3, 1.0 - p))
 
 	for m in monsters:
 		if visible_cells.has(m.pos):
-			draw_sprite(m.pos, m.sprite)
-			if m.hp < m.max_hp:
-				var w := float(TILE - 4) * m.hp / m.max_hp
-				draw_rect(Rect2(m.pos.x * TILE + 2, m.pos.y * TILE, TILE - 4, 3), Color("1b1424"))
-				draw_rect(Rect2(m.pos.x * TILE + 2, m.pos.y * TILE, w, 3), Color("e04030"))
+			draw_actor(m)
+	draw_actor(player)
 
-	draw_sprite(player.pos, player.sprite)
+	for fx: Dictionary in floaters:
+		var t: float = fx["t"]
+		var alpha := clampf((FLOAT_TIME - t) / (FLOAT_TIME * 0.5), 0.0, 1.0)
+		var col: Color = fx["color"]
+		col.a = alpha
+		var pos: Vector2 = fx["pos"] + Vector2(-TILE, -4.0 - t * 30.0)
+		draw_string_outline(font, pos, fx["text"], HORIZONTAL_ALIGNMENT_CENTER, TILE * 3, 16, 5,
+			Color(0, 0, 0, alpha))
+		draw_string(font, pos, fx["text"], HORIZONTAL_ALIGNMENT_CENTER, TILE * 3, 16, col)
+
+	draw_set_transform(Vector2.ZERO)
 	draw_ui()
+
+	if fade > 0.0:
+		draw_rect(Rect2(0, 0, MAP_W * TILE, UI_TOP), Color(0, 0, 0, fade))
 
 	if game_over:
 		draw_rect(Rect2(0, 0, MAP_W * TILE, UI_TOP), Color(0, 0, 0, 0.7))
@@ -532,11 +616,48 @@ func _draw() -> void:
 
 
 func draw_sprite(cell: Vector2i, index: int, tint := Color.WHITE) -> void:
+	draw_sprite_px(cell_px(cell), index, tint)
+
+
+func draw_sprite_px(px: Vector2, index: int, tint := Color.WHITE) -> void:
+	draw_sprite_rect(Rect2(px, Vector2(TILE, TILE)), index, tint)
+
+
+func draw_sprite_rect(rect: Rect2, index: int, tint := Color.WHITE) -> void:
 	var src := Rect2(
 		(index % SHEET_COLUMNS) * SPRITE_PX,
 		floori(index / float(SHEET_COLUMNS)) * SPRITE_PX,
 		SPRITE_PX, SPRITE_PX)
-	draw_texture_rect_region(SPRITES, Rect2(cell.x * TILE, cell.y * TILE, TILE, TILE), src, tint)
+	draw_texture_rect_region(SPRITES, rect, src, tint)
+
+
+## Dessine un personnage avec ses animations : respiration, élan d'attaque, flash.
+func draw_actor(a: Actor) -> void:
+	var offset := Vector2(0, bob(a.phase))
+	if a.bump_t > 0.0:
+		offset += a.bump_dir * TILE * 0.4 * sin(PI * (1.0 - a.bump_t))
+	var tint := Color.WHITE
+	if a.flash_t > 0.0:
+		tint = Color(1.0 + 2.5 * a.flash_t, 1.0 + 0.8 * a.flash_t, 1.0 + 0.8 * a.flash_t)
+	var px := a.vis + offset
+	draw_sprite_px(px, a.sprite, tint)
+	if a != player and a.hp < a.max_hp:
+		var w := float(TILE - 4) * a.hp / a.max_hp
+		draw_rect(Rect2(px.x + 2, px.y - 2, TILE - 4, 3), Color("1b1424"))
+		draw_rect(Rect2(px.x + 2, px.y - 2, w, 3), Color("e04030"))
+
+
+## Petit mouvement de haut en bas (1 pixel du dessin), chacun à son rythme.
+func bob(phase: float) -> float:
+	return -2.0 if int(anim_time * 2.0 + phase * 2.0) % 2 == 0 else 0.0
+
+
+func cell_px(c: Vector2i) -> Vector2:
+	return Vector2(c * TILE)
+
+
+func pop_text(cell: Vector2i, text: String, color: Color) -> void:
+	floaters.append({"text": text, "pos": cell_px(cell), "color": color, "t": 0.0})
 
 
 ## Choisit l'image d'une case : mur vu de face s'il y a du sol juste en dessous,
