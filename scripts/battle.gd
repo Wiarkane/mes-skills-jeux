@@ -547,7 +547,7 @@ func draw_enemy(e, i: int) -> void:
 	if downed.has(e):
 		rot = PI / 2.0
 		off = Vector2(0, 40)
-	draw_ellipse(c + Vector2(0, 85), 75.0, 16.0, Color(0, 0, 0, 0.5))
+	draw_oval(c + Vector2(0, 85), 75.0, 16.0, Color(0, 0, 0, 0.5))
 	var tint := Color.WHITE
 	if e.flash_t > 0.0:
 		tint = Color(1.0 + 2.5 * e.flash_t, 1.0 + 0.8 * e.flash_t, 1.0 + 0.8 * e.flash_t)
@@ -564,7 +564,7 @@ func draw_enemy(e, i: int) -> void:
 	var w := 170.0
 	draw_rect(Rect2(c.x - w / 2, y + 10, w, 12), Color("2a1420"))
 	draw_rect(Rect2(c.x - w / 2, y + 10, w * maxi(e.hp, 0) / e.max_hp, 12), RED)
-	var weak_text := "Faible : %s" % (e.weak if main.known_weak.has(e.name) else "?")
+	var weak_text: String = "Faible : %s" % (e.weak if main.known_weak.has(e.name) else "?")
 	if main.known_resist.has(e.name):
 		weak_text += "   Résiste : %s" % e.resist
 	draw_text_outlined(Vector2(c.x - 150, y + 46), weak_text, 17, Color("c8c8e0"), 300)
@@ -662,7 +662,7 @@ func draw_text_outlined(pos: Vector2, text: String, size: int, color: Color, wid
 	draw_string(font, pos, text, HORIZONTAL_ALIGNMENT_CENTER, width, size, color)
 
 
-func draw_ellipse(center: Vector2, rx: float, ry: float, color: Color) -> void:
+func draw_oval(center: Vector2, rx: float, ry: float, color: Color) -> void:
 	var points := PackedVector2Array()
 	for i in 24:
 		var a := TAU * i / 24.0
