@@ -22,10 +22,18 @@ et si vous mourez, vous recommencez au début.
 
 ## Le jeu
 
-- `@` c'est vous. `>` est l'escalier vers l'étage suivant.
-- Objets : `!` potion de soin, `/` épée (attaque +1), `[` bouclier (défense +1).
-- Monstres : `r` rat, `g` gobelin, `s` squelette, `o` orc, `T` troll, `D` démon.
+- Vous êtes le chevalier bleu. L'escalier mène à l'étage suivant.
+- Objets : potion de soin (rose), épée (attaque +1), bouclier (défense +1).
+- Monstres : rat, gobelin, squelette, orc, troll, démon.
   Plus vous descendez, plus ils sont nombreux et forts.
+
+## Graphismes
+
+Les images sont dans `assets/sprites.png` (pixel art 12×12, affiché en ×2).
+Elles sont dessinées par `tools/make_sprites.py` : chaque lettre est une couleur.
+Pour modifier un dessin, changez les lettres puis lancez `python3 tools/make_sprites.py`.
+Vous pouvez aussi retoucher `assets/sprites.png` directement dans un logiciel de dessin
+(Aseprite, Piskel, GIMP…), en gardant la même grille.
 - Vaincre des monstres donne de l'expérience et fait monter de niveau.
 - Votre record de profondeur est gardé d'une partie à l'autre.
 
@@ -36,4 +44,5 @@ un nombre dans **Graine Fixe** (0 = donjon aléatoire).
 
 - `scripts/main.gd` : le jeu (tours, combats, vision, affichage).
 - `scripts/dungeon.gd` : la génération des donjons.
+- `assets/sprites.png` et `tools/make_sprites.py` : les graphismes.
 - `.agents/skills/` et `.claude/skills/` : les skills de développement de jeux pour Claude.

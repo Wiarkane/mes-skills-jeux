@@ -1,8 +1,23 @@
 extends Node2D
 ## Roguelike au tour par tour : donjon généré, champ de vision, mort définitive.
-## Tout est dessiné avec des formes et des lettres : aucune image n'est nécessaire.
+## Les images viennent de assets/sprites.png (créée par tools/make_sprites.py).
 
 const Dungeon = preload("res://scripts/dungeon.gd")
+const SPRITES = preload("res://assets/sprites.png")
+const SPRITE_PX := 12
+const SHEET_COLUMNS := 8
+
+# Numéros des images dans assets/sprites.png (même ordre que tools/make_sprites.py).
+const SPR_WALL_TOP := 0
+const SPR_WALL_FACE := 1
+const SPR_FLOOR := 2
+const SPR_FLOOR_CRACKED := 3
+const SPR_FLOOR_PEBBLES := 4
+const SPR_STAIRS := 5
+const SPR_PLAYER := 6
+const SPR_POTION := 13
+
+const DIM := Color(0.38, 0.38, 0.52)
 
 const TILE := 24
 const MAP_W := 60
@@ -22,33 +37,28 @@ const DIRS := [
 @export var graine_fixe: int = 0
 
 var COL_BG := Color("0d0d10")
-var COL_WALL_LIT := Color("6b5b4b")
-var COL_WALL_DIM := Color("2a2520")
-var COL_FLOOR_LIT := Color("383842")
-var COL_FLOOR_DIM := Color("1a1a20")
 
-# nom, lettre, couleur, PV, attaque, défense, XP, profondeur minimale, fréquence
+# nom, image, PV, attaque, défense, XP, profondeur minimale, fréquence
 var MONSTERS := [
-	["le rat", "r", Color("a89878"), 4, 2, 0, 2, 1, 6],
-	["le gobelin", "g", Color("6fbf4a"), 7, 3, 0, 4, 1, 4],
-	["le squelette", "s", Color("e0e0d0"), 10, 4, 1, 6, 2, 3],
-	["l'orc", "o", Color("3f9f3a"), 15, 5, 2, 9, 3, 3],
-	["le troll", "T", Color("9f7f5f"), 26, 7, 3, 16, 5, 2],
-	["le démon", "D", Color("e0402a"), 34, 9, 4, 25, 7, 2],
+	["le rat", 7, 4, 2, 0, 2, 1, 6],
+	["le gobelin", 8, 7, 3, 0, 4, 1, 4],
+	["le squelette", 9, 10, 4, 1, 6, 2, 3],
+	["l'orc", 10, 15, 5, 2, 9, 3, 3],
+	["le troll", 11, 26, 7, 3, 16, 5, 2],
+	["le démon", 12, 34, 9, 4, 25, 7, 2],
 ]
 
-# type, lettre, couleur, fréquence
+# type, image, fréquence
 var ITEMS := [
-	["potion", "!", Color("e05a8a"), 6],
-	["epee", "/", Color("7fd0e0"), 2],
-	["bouclier", "[", Color("6f8fe0"), 2],
+	["potion", SPR_POTION, 6],
+	["epee", 14, 2],
+	["bouclier", 15, 2],
 ]
 
 
 class Actor:
 	var name: String
-	var glyph: String
-	var color: Color
+	var sprite: int
 	var pos: Vector2i
 	var hp: int
 	var max_hp: int
@@ -57,10 +67,9 @@ class Actor:
 	var xp: int
 	var awake := false
 
-	func _init(n: String, g: String, c: Color, p: Vector2i, h: int, a: int, d: int, x: int) -> void:
+	func _init(n: String, spr: int, p: Vector2i, h: int, a: int, d: int, x: int) -> void:
 		name = n
-		glyph = g
-		color = c
+		sprite = spr
 		pos = p
 		hp = h
 		max_hp = h
@@ -71,14 +80,12 @@ class Actor:
 
 class Item:
 	var kind: String
-	var glyph: String
-	var color: Color
+	var sprite: int
 	var pos: Vector2i
 
-	func _init(k: String, g: String, c: Color, p: Vector2i) -> void:
+	func _init(k: String, spr: int, p: Vector2i) -> void:
 		kind = k
-		glyph = g
-		color = c
+		sprite = spr
 		pos = p
 
 
@@ -104,6 +111,8 @@ var font: Font
 
 func _ready() -> void:
 	font = ThemeDB.fallback_font
+	# Pixels nets quand les images sont agrandies (pas de flou).
+	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	load_profile()
 	new_run()
 
@@ -119,7 +128,7 @@ func new_run() -> void:
 	kills = 0
 	game_over = false
 	messages.clear()
-	player = Actor.new("vous", "@", Color("f2e6b8"), Vector2i.ZERO, 30, 5, 1, 0)
+	player = Actor.new("vous", SPR_PLAYER, Vector2i.ZERO, 30, 5, 1, 0)
 	log_msg("Bienvenue dans le donjon. Trouvez l'escalier > pour descendre.")
 	build_level()
 
@@ -183,28 +192,28 @@ func make_monster(p: Vector2i) -> Actor:
 	var rows := []
 	var weights := []
 	for row: Array in MONSTERS:
-		var min_depth: int = row[7]
+		var min_depth: int = row[6]
 		if min_depth > depth:
 			continue
 		rows.append(row)
 		# Les monstres forts deviennent plus fréquents en descendant.
-		var w: int = row[8]
+		var w: int = row[7]
 		if min_depth > 1:
 			w += (depth - min_depth) * 2
 		weights.append(w)
 	var r := weighted_pick(rows, weights)
 	var bonus := int((depth - 1) / 3.0)
-	var hp: int = r[3] + depth - 1
-	var atk: int = r[4] + bonus
-	return Actor.new(r[0], r[1], r[2], p, hp, atk, r[5], r[6])
+	var hp: int = r[2] + depth - 1
+	var atk: int = r[3] + bonus
+	return Actor.new(r[0], r[1], p, hp, atk, r[4], r[5])
 
 
 func make_item(p: Vector2i) -> Item:
 	var weights := []
 	for row: Array in ITEMS:
-		weights.append(row[3])
+		weights.append(row[2])
 	var r := weighted_pick(ITEMS, weights)
-	return Item.new(r[0], r[1], r[2], p)
+	return Item.new(r[0], r[1], p)
 
 
 # ---------------------------------------------------------------- Commandes
@@ -347,7 +356,7 @@ func kill(target: Actor) -> void:
 	player.xp += target.xp
 	log_msg("Vous avez vaincu %s ! (+%d XP)" % [target.name, target.xp])
 	if rng.randf() < 0.15 and item_at(target.pos) == null:
-		items.append(Item.new("potion", "!", Color("e05a8a"), target.pos))
+		items.append(Item.new("potion", SPR_POTION, target.pos))
 	while player.xp >= level * 10:
 		player.xp -= level * 10
 		level += 1
@@ -490,28 +499,25 @@ func _draw() -> void:
 			var lit := visible_cells.has(c)
 			if not lit and explored[y * MAP_W + x] == 0:
 				continue
-			var col: Color
-			if dungeon.is_opaque(c):
-				col = COL_WALL_LIT if lit else COL_WALL_DIM
-			else:
-				col = COL_FLOOR_LIT if lit else COL_FLOOR_DIM
-			draw_rect(Rect2(x * TILE, y * TILE, TILE - 1, TILE - 1), col)
+			var tint := Color.WHITE if lit else DIM
+			draw_sprite(c, tile_sprite(c), tint)
 
 	if explored[stairs.y * MAP_W + stairs.x] == 1:
-		draw_glyph(stairs, ">", Color("e8c547"))
+		draw_sprite(stairs, SPR_STAIRS, Color.WHITE if visible_cells.has(stairs) else DIM)
 
 	for it in items:
 		if visible_cells.has(it.pos):
-			draw_glyph(it.pos, it.glyph, it.color)
+			draw_sprite(it.pos, it.sprite)
 
 	for m in monsters:
 		if visible_cells.has(m.pos):
-			draw_glyph(m.pos, m.glyph, m.color)
+			draw_sprite(m.pos, m.sprite)
 			if m.hp < m.max_hp:
 				var w := float(TILE - 4) * m.hp / m.max_hp
-				draw_rect(Rect2(m.pos.x * TILE + 2, m.pos.y * TILE + 1, w, 3), Color("c0392b"))
+				draw_rect(Rect2(m.pos.x * TILE + 2, m.pos.y * TILE, TILE - 4, 3), Color("1b1424"))
+				draw_rect(Rect2(m.pos.x * TILE + 2, m.pos.y * TILE, w, 3), Color("e04030"))
 
-	draw_glyph(player.pos, player.glyph, player.color)
+	draw_sprite(player.pos, player.sprite)
 	draw_ui()
 
 	if game_over:
@@ -525,9 +531,23 @@ func _draw() -> void:
 			HORIZONTAL_ALIGNMENT_CENTER, MAP_W * TILE, 20, Color("e8c547"))
 
 
-func draw_glyph(cell: Vector2i, glyph: String, color: Color) -> void:
-	draw_string(font, Vector2(cell.x * TILE, cell.y * TILE + TILE * 0.8), glyph,
-		HORIZONTAL_ALIGNMENT_CENTER, TILE, 20, color)
+func draw_sprite(cell: Vector2i, index: int, tint := Color.WHITE) -> void:
+	var src := Rect2(
+		(index % SHEET_COLUMNS) * SPRITE_PX,
+		floori(index / float(SHEET_COLUMNS)) * SPRITE_PX,
+		SPRITE_PX, SPRITE_PX)
+	draw_texture_rect_region(SPRITES, Rect2(cell.x * TILE, cell.y * TILE, TILE, TILE), src, tint)
+
+
+## Choisit l'image d'une case : mur vu de face s'il y a du sol juste en dessous,
+## sinon dessus du mur ; pour le sol, une variante qui dépend de la position.
+func tile_sprite(c: Vector2i) -> int:
+	if dungeon.is_opaque(c):
+		return SPR_WALL_FACE if dungeon.is_walkable(c + Vector2i.DOWN) else SPR_WALL_TOP
+	var h := ((c.x * 73856093) ^ (c.y * 19349663)) % 10
+	if h < 7:
+		return SPR_FLOOR
+	return SPR_FLOOR_CRACKED if h < 9 else SPR_FLOOR_PEBBLES
 
 
 func draw_ui() -> void:
