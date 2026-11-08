@@ -29,7 +29,9 @@ const FLASH_TIME := 0.22
 const FLOAT_TIME := 0.8
 const DEATH_TIME := 0.35
 const FADE_TIME := 0.35
-const STEP_TIME := 0.3  # durée d'un pas : plus grand = marche plus lente
+const STEP_TIME := 0.3  # durée d'un pas en marchant : plus grand = plus lent
+const RUN_STEP_TIME := 0.15  # durée d'un pas en courant (Maj enfoncée)
+const HOLD_WAIT := 0.25  # touche maintenue contre un monstre : délai entre deux coups
 
 # Zoom de la caméra : 1 = toute la carte, 2 = deux fois plus près, etc.
 const ZOOM_LEVELS := [1.0, 1.5, 2.0, 2.5, 3.0]
@@ -91,6 +93,7 @@ class Actor:
 	var phase := randf()
 	var facing := 1  # 1 = regarde à droite, -1 = à gauche
 	var step_t := 0.0  # > 0 pendant un pas
+	var step_time := 0.3  # durée du pas en cours (marche ou course)
 
 	func _init(n: String, spr: int, p: Vector2i, h: int, a: int, d: int, x: int) -> void:
 		name = n
@@ -135,6 +138,7 @@ var font: Font
 
 # Effets visuels en cours
 var anim_time := 0.0
+var hold_wait := 0.0  # attente avant la prochaine action quand une touche reste enfoncée
 var zoom_index := DEFAULT_ZOOM_INDEX
 var zoom := 2.0
 var cam := Vector2.ZERO  # point de la carte (en pixels) au centre de l'écran
@@ -155,17 +159,17 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	anim_time += delta
-	# Les personnages avancent vers leur case à vitesse régulière (un pas = STEP_TIME).
+	# Les personnages avancent vers leur case à vitesse régulière (un pas = step_time).
 	# S'ils ont du retard, ils accélèrent pour le rattraper.
 	var actors: Array[Actor] = [player]
 	actors.append_array(monsters)
 	for a in actors:
 		var target := cell_px(a.pos)
-		var speed := maxf(TILE / STEP_TIME, a.vis.distance_to(target) * 6.0)
+		var speed := maxf(TILE / a.step_time, a.vis.distance_to(target) * 6.0)
 		a.vis = a.vis.move_toward(target, speed * delta)
 		a.bump_t = maxf(0.0, a.bump_t - delta / BUMP_TIME)
 		a.flash_t = maxf(0.0, a.flash_t - delta / FLASH_TIME)
-		a.step_t = maxf(0.0, a.step_t - delta / STEP_TIME)
+		a.step_t = maxf(0.0, a.step_t - delta / a.step_time)
 	for fx: Dictionary in floaters:
 		fx["t"] += delta
 	floaters = floaters.filter(func(f: Dictionary) -> bool: return f["t"] < FLOAT_TIME)
@@ -175,7 +179,47 @@ func _process(delta: float) -> void:
 	cam = cam.lerp(camera_target(), 1.0 - exp(-delta * 10.0))
 	trauma = maxf(0.0, trauma - delta * 2.0)
 	fade = maxf(0.0, fade - delta / FADE_TIME)
+	handle_held_keys(delta)
 	queue_redraw()
+
+
+## Touche de direction maintenue : le héros continue d'avancer, un pas après l'autre.
+func handle_held_keys(delta: float) -> void:
+	hold_wait = maxf(0.0, hold_wait - delta)
+	if game_over or player.step_t > 0.0 or hold_wait > 0.0:
+		return
+	var dir := held_direction()
+	if dir == Vector2i.ZERO:
+		return
+	if try_move(dir):
+		end_player_turn()
+	if player.step_t <= 0.0:
+		# Pas de déplacement (attaque ou mur) : petite pause avant de recommencer.
+		hold_wait = HOLD_WAIT
+
+
+func held_direction() -> Vector2i:
+	var d := Vector2i.ZERO
+	if is_any_pressed([KEY_UP, KEY_W, KEY_KP_8, KEY_KP_7, KEY_KP_9]):
+		d.y -= 1
+	if is_any_pressed([KEY_DOWN, KEY_S, KEY_KP_2, KEY_KP_1, KEY_KP_3]):
+		d.y += 1
+	if is_any_pressed([KEY_LEFT, KEY_A, KEY_KP_4, KEY_KP_7, KEY_KP_1]):
+		d.x -= 1
+	if is_any_pressed([KEY_RIGHT, KEY_D, KEY_KP_6, KEY_KP_9, KEY_KP_3]):
+		d.x += 1
+	return d
+
+
+func is_any_pressed(keys: Array) -> bool:
+	for k: Key in keys:
+		if Input.is_physical_key_pressed(k):
+			return true
+	return false
+
+
+func current_step_time() -> float:
+	return RUN_STEP_TIME if Input.is_key_pressed(KEY_SHIFT) else STEP_TIME
 
 
 # ---------------------------------------------------------------- Partie
@@ -312,8 +356,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			new_run()
 		return
 
-	# Touche maintenue : on attend la fin du pas en cours avant d'en refaire un.
-	if key.echo and player.step_t > 0.0:
+	# Les touches maintenues sont gérées dans handle_held_keys().
+	if key.echo:
 		return
 
 	# Touches « physiques » : ZQSD sur un clavier AZERTY = WASD sur un clavier QWERTY.
@@ -348,6 +392,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	get_viewport().set_input_as_handled()
 	if took_turn:
 		end_player_turn()
+	if player.step_t <= 0.0:
+		# Attaque, attente ou mur : on évite qu'une touche gardée enfoncée refasse l'action tout de suite.
+		hold_wait = HOLD_WAIT
 
 
 func end_player_turn() -> void:
@@ -364,7 +411,7 @@ func try_move(dir: Vector2i) -> bool:
 		return true
 	if not dungeon.is_walkable(target):
 		return false
-	start_step(player, dir)
+	start_step(player, dir, current_step_time())
 	player.pos = target
 	pick_up()
 	if target == stairs:
@@ -497,7 +544,7 @@ func monsters_act() -> void:
 				best_d = dp
 				best = p
 		if best != m.pos:
-			start_step(m, best - m.pos)
+			start_step(m, best - m.pos, player.step_time)
 			m.pos = best
 
 
@@ -722,7 +769,8 @@ func actor_frame(a: Actor) -> int:
 	return base + 2 if walk < 0 else base + 3 + walk
 
 
-func start_step(a: Actor, dir: Vector2i) -> void:
+func start_step(a: Actor, dir: Vector2i, duration: float) -> void:
+	a.step_time = duration
 	if dir.x != 0:
 		a.facing = signi(dir.x)
 	a.step_t = 1.0
@@ -801,5 +849,5 @@ func draw_ui() -> void:
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 16, shade)
 
 	draw_string(font, Vector2(12, y0 + 156),
-		"Flèches / ZQSD / pavé numérique : bouger et attaquer   ·   Espace : attendre   ·   E : boire une potion   ·   Entrée : descendre   ·   Molette ou +/- : zoom   ·   Graine %d" % run_seed,
+		"Flèches / ZQSD / pavé numérique : bouger et attaquer   ·   Maj : courir   ·   Espace : attendre   ·   E : boire une potion   ·   Entrée : descendre   ·   Molette ou +/- : zoom   ·   Graine %d" % run_seed,
 		HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("8a8a96"))

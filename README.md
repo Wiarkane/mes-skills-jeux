@@ -15,6 +15,7 @@ et si vous mourez, vous recommencez au début.
 |---|---|
 | Flèches, ZQSD (ou WASD) | Se déplacer. Marcher sur un monstre l'attaque. |
 | Pavé numérique (1-9) | Se déplacer, y compris en diagonale |
+| Maj (Shift) + direction | Courir |
 | Espace ou 5 | Attendre un tour |
 | E | Boire une potion de soin |
 | Molette, + ou - | Zoomer ou dézoomer |
