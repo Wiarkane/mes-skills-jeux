@@ -29,7 +29,7 @@ const FLASH_TIME := 0.22
 const FLOAT_TIME := 0.8
 const DEATH_TIME := 0.35
 const FADE_TIME := 0.35
-const STEP_TIME := 0.2
+const STEP_TIME := 0.3  # durée d'un pas : plus grand = marche plus lente
 
 # Zoom de la caméra : 1 = toute la carte, 2 = deux fois plus près, etc.
 const ZOOM_LEVELS := [1.0, 1.5, 2.0, 2.5, 3.0]
@@ -91,7 +91,6 @@ class Actor:
 	var phase := randf()
 	var facing := 1  # 1 = regarde à droite, -1 = à gauche
 	var step_t := 0.0  # > 0 pendant un pas
-	var foot := 0  # alterne entre les deux images de marche
 
 	func _init(n: String, spr: int, p: Vector2i, h: int, a: int, d: int, x: int) -> void:
 		name = n
@@ -156,12 +155,14 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	anim_time += delta
-	# Les personnages glissent vers leur case au lieu de s'y téléporter.
-	var k := 1.0 - exp(-delta * 22.0)
+	# Les personnages avancent vers leur case à vitesse régulière (un pas = STEP_TIME).
+	# S'ils ont du retard, ils accélèrent pour le rattraper.
 	var actors: Array[Actor] = [player]
 	actors.append_array(monsters)
 	for a in actors:
-		a.vis = a.vis.lerp(cell_px(a.pos), k)
+		var target := cell_px(a.pos)
+		var speed := maxf(TILE / STEP_TIME, a.vis.distance_to(target) * 6.0)
+		a.vis = a.vis.move_toward(target, speed * delta)
 		a.bump_t = maxf(0.0, a.bump_t - delta / BUMP_TIME)
 		a.flash_t = maxf(0.0, a.flash_t - delta / FLASH_TIME)
 		a.step_t = maxf(0.0, a.step_t - delta / STEP_TIME)
@@ -309,6 +310,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	if game_over:
 		if key.physical_keycode == KEY_R:
 			new_run()
+		return
+
+	# Touche maintenue : on attend la fin du pas en cours avant d'en refaire un.
+	if key.echo and player.step_t > 0.0:
 		return
 
 	# Touches « physiques » : ZQSD sur un clavier AZERTY = WASD sur un clavier QWERTY.
@@ -686,8 +691,8 @@ func draw_sprite_rect(rect: Rect2, index: int, tint := Color.WHITE) -> void:
 func draw_actor(a: Actor) -> void:
 	var offset := Vector2.ZERO
 	if a.step_t > 0.0:
-		# Petit saut à chaque pas.
-		offset.y = -2.0 * roundf(sin(PI * (1.0 - a.step_t)) * 1.5)
+		# Le corps descend d'un pixel quand le pied se pose, puis remonte.
+		offset.y = 2.0 if a.step_t > 0.5 else 0.0
 	else:
 		offset.y = bob(a.phase)
 	if a.bump_t > 0.0:
@@ -706,16 +711,20 @@ func draw_actor(a: Actor) -> void:
 ## Choisit l'image du personnage selon sa direction et s'il est en train de marcher.
 func actor_frame(a: Actor) -> int:
 	var base := SPR_WALK_BASE + (a.sprite - SPR_PLAYER) * WALK_FRAMES
-	var walking := a.step_t > 0.0
+	# Un pas : d'abord la jambe en avant (image A), puis les jambes qui se croisent (B).
+	var walk := -1
+	if a.step_t > 0.5:
+		walk = 0
+	elif a.step_t > 0.0:
+		walk = 1
 	if a.facing > 0:
-		return base + a.foot if walking else a.sprite
-	return base + 3 + a.foot if walking else base + 2
+		return a.sprite if walk < 0 else base + walk
+	return base + 2 if walk < 0 else base + 3 + walk
 
 
 func start_step(a: Actor, dir: Vector2i) -> void:
 	if dir.x != 0:
 		a.facing = signi(dir.x)
-	a.foot = 1 - a.foot
 	a.step_t = 1.0
 
 
